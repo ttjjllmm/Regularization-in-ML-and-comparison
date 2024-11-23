@@ -18,7 +18,7 @@ rm(list=ls());    # Clears all objects
 cat("\014");      # Clears the console screen
 
 
-setwd("C:/Users/tuukk/OneDrive - Hanken Svenska handelshogskolan/Masters Finance/Machine Learning")
+
 
 
 
