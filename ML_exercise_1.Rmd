@@ -1,0 +1,270 @@
+---
+title: "ML Exercise 1"
+author: "Tuukka Lukkari"
+date: "2024-03-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1 Empirical questions
+
+Data cleaning, data modification...
+
+```{r cleaning}
+rm(list=ls());    # Clears all objects
+cat("\014");      # Clears the console screen
+
+
+setwd("C:/Users/tuukk/OneDrive - Hanken Svenska handelshogskolan/Masters Finance/Machine Learning")
+
+
+
+#install.packages("haven")
+library(haven)
+Data = read_dta("Data_2024.dta")
+#View(Data)
+
+dim(Data) # 309 columns, 1 950 726 rows
+
+# Cleaning
+df <- Data[, c(2, 6, 8, 10:309)] #Including only those columns we want
+df <- na.omit(df) # Remove null values
+dim(df)
+
+# Splitting the data into a training and test set
+# Training 2005-2015
+# Test set 2016-2020
+
+train <- subset(df, year >= 2005 & year <= 2015)
+dim(train)
+test <- subset(df, year >= 2016 & year <= 2020)
+dim(test)
+```
+
+## 1. Predictions using simple models
+
+You can also embed plots, for example:
+
+```{r intercept & OLS, echo=FALSE}
+  # Dependent variable trt1m and calculate test MSE
+
+lm.fit <- lm(trt1m ~ 1, data = train) # Using one to just have the intercept (look at the lm.fit list, with 1 it has one coefficient and it says intercept)
+
+
+intercept.testMSE <- mean((test$trt1m - predict(lm.fit, newdata = test))^2)
+intercept.testMSE
+
+  # OLS estimation
+lm.fit.OLS <- lm(trt1m ~ . -year, data = train) # Using all variables except "year"
+
+OLS.testMSE <- mean((test$trt1m - predict(lm.fit.OLS, test))^2)
+OLS.testMSE
+```
+
+## 2. Predictions using Forward Stepwise Selection
+
+```{r forward}
+  # Forward Selection
+#(Note, no default function for cross-validation for selection methods)
+library(leaps)
+
+# 2a
+regfit.fwd <- regsubsets(trt1m ~ . -year, data = train, nvmax = 301, method = "forward")
+summary(regfit.fwd) # Shows which coefficients for each number of features should be used (reached max print)
+# From theory we know that the feature that is chosen first will be in all models as the first variable and that is trt1m_m1
+
+# 2b
+regfit.summary <- summary(regfit.fwd)
+which.min(regfit.summary$bic) #The lowest BIC is a combination of 42 variables
+
+# 2c
+coef(regfit.fwd, 42) # Finding the coefficients for the suggestion by Bic
+
+  # test MSE (transforming the test data to a matrix in order to multiply)
+test.mat <- model.matrix(trt1m ~ . -year, data = test) #Calculating the test-MSE
+
+coefi <- coef(regfit.fwd, id = 42) # Best model was 42
+pred <- test.mat[, names(coefi)] %*% coefi
+forward.testMSE <- mean((test$trt1m - pred)^2) 
+forward.testMSE #test-MSE using BIC [1] 414.3143
+
+
+
+# General Modifications
+  # Taking away column "year"
+test2 <- test[, c(2:303)]
+train2 <- train[, c(2:303)]
+
+  # There is no predict function in regsubsets, thus we should create an own
+predict.regsubsets <- function(object, newdata , id, ...) {
+  form <- as.formula(object$call[[2]])
+  mat <- model.matrix(form, newdata)
+  coefi <- coef(object, id = id)
+  xvars <- names(coefi)
+  mat[, xvars] %*% coefi
+}
+
+# 2d
+k <- 10
+n <- nrow(train2)
+set.seed(1)
+folds <- sample(rep(1:k, length = n))
+cv.errors <- matrix(NA, k, 40, dimnames = list(NULL, paste(1:40)))
+
+# Loop that performs the 10-fold cross validation (we will use our own prediction function)
+for (j in 1:k) {
+  best.fit <- regsubsets(trt1m ~ ., data = train2[folds != j, ], nvmax = 40, method = "forward")
+  for (i in 1:40) {
+    pred <- predict(best.fit, newdata = train2[folds == j, ], id =i)
+    cv.errors[j, i] <- mean((train2$trt1m[folds == j] - pred)^2)
+  }
+} 
+
+#The loop gave us a j X i matrix
+mean.cv.errors <- apply(cv.errors, 2, mean) # Mean cross-validation error for each number of variables
+mean.cv.errors
+par(mfrow = c(1, 1))
+plot(mean.cv.errors, type ="b") # Our cross-validation selects a 40 variable model (out of M1 to M40) to be the best model (lowest mean.cv.error)
+
+# 2e
+coef(best.fit, 40) # Finding the coefficients for the suggestion
+
+# Calculation of test-MSE
+test.mat2 <- model.matrix(trt1m ~ ., data = test2) #Calculating the test-MSE
+
+coefi2 <- coef(best.fit, id = 40) # Best model was 40
+pred2 <- test.mat2[, names(coefi2)] %*% coefi2
+forward.CV.testMSE <- mean((test2$trt1m - pred2)^2) #test-MSE
+forward.CV.testMSE #[1] 414.327
+```
+
+## 3. Predictions using Backward Stepwise Selection
+
+```{r stepwise}
+regfit.bwd <- regsubsets(trt1m ~ ., data = train2, nvmax = 40, method = "backward")
+summary(regfit.bwd) # Shows the combinations
+
+k <- 10
+n <- nrow(train2)
+set.seed(1)
+folds <- sample(rep(1:k, length = n))
+cv.errors2 <- matrix(NA, k, 40, dimnames = list(NULL, paste(1:40)))
+
+# Loop that performs the cross validation (we will use our own prediction function)
+for (j in 1:k) {
+  best.fit2 <- regsubsets(trt1m ~ ., data = train2[folds != j, ], nvmax = 40, method = "backward")
+  for (i in 1:40) {
+    pred <- predict(best.fit2, newdata = train2[folds == j, ], id =i)
+    cv.errors2[j, i] <- mean((train2$trt1m[folds == j] - pred)^2)
+  }
+} 
+#The loop gave us a j X i matrix
+mean.cv.errors2 <- apply(cv.errors2, 2, mean) # Mean cross-validation error for each number of variables
+mean.cv.errors2
+par(mfrow = c(1, 1))
+plot(mean.cv.errors2, type ="b") # 40 features is again the best
+
+# 3b
+coef(best.fit2, 40) # Finding the coefficients for the suggestion
+
+# 3c
+test.mat3 <- model.matrix(trt1m ~ ., data = test2) #Calculating the test-MSE
+coefi3 <- coef(best.fit2, id = 40) # Best model was 39
+pred3 <- test.mat3[, names(coefi3)] %*% coefi3
+backward.testMSE <- mean((test2$trt1m - pred3)^2) #test-MSE
+backward.testMSE #[1] 413.7607
+
+```
+
+## 4. Predictions using Lasso
+
+```{r lasso}
+library(glmnet)
+set.seed(1)
+  # Defining training x and y and test x and y
+x <- model.matrix(trt1m ~ ., train2)[, -1] #[, -1] indicates that we want to exclude the first column
+y <- train2$trt1m
+x2 <- model.matrix(trt1m ~ ., test2)[, -1] # x on the test set
+y2 <- test2$trt1m # y on the test set
+
+grid <- 10^seq(from = 10, to = -2, length = 100) # defining the lambda as 10^10 to 10^(-2) and the length is 100 (can be defined by "by" also if we want to control the interval lengths)
+
+
+out <- glmnet(x, y, alpha = 1, lambda = grid) #Note, in ridge regression we use function glmnet() with alpha = 0, now in Lasso, we use alpha = 1
+plot(out, xvar = "lambda") #4b) coefficients and lambda. If default, it will plot L1 norm
+lasso.coef <- predict(out, type = "coefficients", s = 0.5)[1:302, ] # Lambda to 0.5
+lasso.coef #According to theory, the lasso shrinks some coefficients to exactly zero, giving less variables as the ridge regression
+lasso.coef[lasso.coef != 0] # Excluding the coefficients with values of 0
+#(Intercept)    trt1m_m1      niq_m1 
+ #0.51425639 -0.01838961  1.57690856 
+
+
+# 4c) Use the 10-fold cross-validation on the training set to find the tuning parameter that yields the model with the lowest MSE
+
+  # Function cv.out performs cross-validation 
+cv.out.Lasso <- cv.glmnet(x = x, y = y, aplha = 1, lambda = grid, nfolds = 10) #k = 10 = nfolds (default is also 10)
+plot(cv.out.Lasso)
+
+bestlam.Lasso <- cv.out.Lasso$lambda.min # Finding the best lambda value to be 0.01
+bestlam.Lasso
+
+
+  # Performing prediction 
+lasso.pred <- predict(cv.out.Lasso, s = bestlam.Lasso, newx = x2) #x2 is the test set
+lasso.testMSE <- mean((lasso.pred - y2)^2) # Gives a test-MSE of 413,3952
+```
+
+## 5. Predictions using Ridge Regression
+
+```{r ridge}
+set.seed(1)
+
+cv.out.Ridge <- cv.glmnet(x = x, y = y, alpha = 0) #Default folds = 10
+plot(cv.out.Ridge)
+
+bestlam.Ridge <- cv.out.Ridge$lambda.min
+bestlam.Ridge # Display best lambda using 10-fold cross-validation on the training set
+
+# 5b
+ridge.pred <- predict(cv.out.Ridge, s = bestlam.Ridge, newx = x2)
+ridge.testMSE <- mean((ridge.pred - y2)^2)
+ridge.testMSE #[1] 413.5389
+```
+
+## 6. Results: Predictions
+
+```{r results}
+# Comparison of all test-MSEs
+
+intercept.testMSE # 412.568
+OLS.testMSE # 413.9517
+forward.testMSE # testMSE based on BIC 414.3143
+forward.CV.testMSE # 414.327
+backward.testMSE # 413.7607
+
+lasso.testMSE # 413.395
+ridge.testMSE # 413.5389
+
+# 6a
+# Linear model with only the intercept is the best
+# The forward selection model by CV yields the worst MSE
+
+# 6b
+# Lasso and ridge also performs better than the OLS but worse than the intercept. This could mean that the data is best described by one mean value as the intercept suggests.
+```
+
+## 7. Best subset selection method and cross-validation
+
+```{r bss}
+bestsub <- regsubsets(trt1m ~ ., df, nvmax = 4, method = "exhaustive", really.big = TRUE)
+summary(bestsub)
+# 1 variable: trt1m_m1
+# 2 variable: trt1m_m1 & niq_m1
+# 3 variable: trt1m_m1 & niq_m1 & req_m1
+
+coef(bestsub, 4) # Finding the variables and coefficients for the best 4 model
+# (Intercept)    trt1m_m1   opepsq_m1    tstkq_m1    xoprq_m1 
+# 0.64679128 -0.04838691 70.73913798  1.38054233  0.68821904 
